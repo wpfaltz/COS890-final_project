@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+results/*
+!results/.gitkeep
+*.log
+gurobi.log
+.ipynb_checkpoints/

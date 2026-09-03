@@ -1,0 +1,27 @@
+[project]
+name = "vrptw-opt"
+version = "0.1.0"
+description = "VRPTW solved via Lagrangian Relaxation, Branch-and-Bound and Branch-and-Cut with Gurobi"
+requires-python = ">=3.11"
+dependencies = [
+    "gurobipy>=12.0",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "matplotlib>=3.9",
+    "networkx>=3.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
