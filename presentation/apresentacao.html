@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VRPTW — Lagrangeana, Branch-and-Bound e Branch-and-Cut</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #16213a;
+    --accent: #38bdf8;
+    --accent2: #facc15;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --good: #4ade80;
+    --bad: #f87171;
+    --mono: 'Cascadia Code', 'Consolas', 'SFMono-Regular', Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: radial-gradient(circle at 20% 20%, #1b2947 0%, #0f172a 60%);
+    color: var(--text);
+    font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  }
+  .deck { position: relative; width: 100vw; height: 100vh; }
+  .slide {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    justify-content: flex-start;
+    overflow-y: auto;
+    padding: 4vh 8vw 4.5em 8vw;
+    animation: fade .35s ease;
+  }
+  .slide.active { display: flex; }
+  @keyframes fade { from { opacity: 0; transform: translateY(8px);} to { opacity: 1; transform: translateY(0);} }
+
+  h1 { font-size: 2.3rem; margin: 0 0 .3em 0; color: #fff; letter-spacing: -0.5px; }
+  h2 { font-size: 1.7rem; margin: 0 0 .6em 0; color: var(--accent); display:flex; align-items:center; gap:.4em;}
+  h2 .tag { font-size: .45em; color: var(--bg); background: var(--accent2); padding: .25em .6em; border-radius: 999px; font-weight:700; }
+  h3 { color: var(--accent2); font-size: 1.15rem; margin: 1em 0 .4em 0; }
+  p, li { font-size: 1.05rem; line-height: 1.5; color: var(--text); }
+  .subtitle { color: var(--muted); font-size: 1.15rem; margin-bottom: 1.5em; }
+  .kicker { color: var(--accent); text-transform: uppercase; letter-spacing: 3px; font-size: .85rem; font-weight: 600; }
+  ul { margin: 0; padding-left: 1.3em; }
+  li { margin-bottom: .5em; }
+  code, .mono { font-family: var(--mono); }
+  .pill { display:inline-block; background:#1e293b; border:1px solid #334155; border-radius:8px; padding:.15em .55em; font-family: var(--mono); font-size:.92em; color:var(--accent2);}
+
+  .grid2 { display: grid; grid-template-columns: 1.1fr .9fr; gap: 3em; align-items: start; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.4em; }
+  .card {
+    background: var(--panel); border: 1px solid #263353; border-radius: 14px;
+    padding: 1.3em 1.5em; box-shadow: 0 10px 30px rgba(0,0,0,.25);
+  }
+  .card h3 { margin-top: 0; }
+  .formula {
+    background: #0b1226; border: 1px solid #263353; border-radius: 10px;
+    padding: 1em 1.3em; font-family: var(--mono); font-size: 1.05rem; color: #d1e8ff;
+    overflow-x: auto; white-space: pre;
+  }
+  .badge-ok { color: var(--good); font-weight: 700; }
+  .badge-bad { color: var(--bad); font-weight: 700; }
+  .badge-warn { color: var(--accent2); font-weight: 700; }
+
+  table { border-collapse: collapse; width: 100%; font-size: .98rem; }
+  th, td { padding: .55em .8em; text-align: right; border-bottom: 1px solid #263353; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--accent); font-weight: 600; background: #101b34; }
+  tr:hover td { background: #101b34; }
+  .note { color: var(--muted); font-size: .95rem; margin-top: .8em; }
+
+  .footer-bar {
+    position: absolute; bottom: 0; left: 0; right: 0; height: 46px;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 8vw; color: var(--muted); font-size: .85rem;
+    border-top: 1px solid #1e293b; background: rgba(15,23,42,.85);
+  }
+  .progress { position: absolute; top:0; left:0; height:4px; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .3s ease; }
+  .nav-btn {
+    background: #1e293b; border: 1px solid #334155; color: var(--text);
+    border-radius: 8px; padding: .4em 1em; cursor: pointer; font-size: .9rem;
+  }
+  .nav-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .kbd { font-family: var(--mono); background:#1e293b; padding:.1em .4em; border-radius:5px; border:1px solid #334155;}
+
+  .two-col-list { columns: 2; column-gap: 2.5em; }
+  .highlight { color: var(--accent2); font-weight: 700; }
+  .center { text-align: center; }
+  .small { font-size: .9rem; }
+  .step-number {
+    display:inline-flex; align-items:center; justify-content:center;
+    width: 2em; height: 2em; border-radius: 50%; background: var(--accent);
+    color: #001; font-weight: 800; margin-right:.5em; flex: none;
+  }
+  .flow-step { display:flex; align-items:flex-start; gap: .6em; margin-bottom: .9em; }
+</style>
+</head>
+<body>
+<div class="deck" id="deck">
+
+  <!-- 1 -->
+  <section class="slide active">
+    <div class="kicker">COS890 — Otimização Combinatória — Projeto Final</div>
+    <h1>Vehicle Routing Problem with Time Windows</h1>
+    <p class="subtitle">Relaxação Lagrangeana &nbsp;•&nbsp; Branch-and-Bound &nbsp;•&nbsp; Branch-and-Cut<br>
+    implementados manualmente em Python, usando o Gurobi apenas como motor de LP</p>
+    <div class="grid3">
+      <div class="card"><h3>Instâncias</h3><p>Benchmark de Solomon (formato padrão), subconjuntos de 10–25 clientes das famílias C1, R1 e RC1.</p></div>
+      <div class="card"><h3>Modelo</h3><p>Formulação arc-flow 2-index compacta, com linkagem de tempo e carga (sem SEC explícito).</p></div>
+      <div class="card"><h3>Regra de ouro</h3><p>Gurobi resolve <span class="highlight">apenas a relaxação linear</span> em cada nó — quem decide branching e cortes somos nós.</p></div>
+    </div>
+  </section>
+
+  <!-- 2 -->
+  <section class="slide">
+    <div class="kicker">Roteiro</div>
+    <h1>O que vamos ver</h1>
+    <div class="grid2">
+      <ul style="font-size:1.25rem">
+        <li>O problema (VRPTW) e o objetivo lexicográfico do Solomon</li>
+        <li>Formulação matemática: variáveis, restrições e função objetivo</li>
+        <li>Como Branch-and-Bound e Branch-and-Cut foram implementados <strong>do zero</strong></li>
+        <li>O que a Relaxação Lagrangeana realmente calcula (e o que ela <em>não</em> calcula)</li>
+        <li>Métricas comparadas entre os três métodos</li>
+        <li>Resultados em múltiplas instâncias — inclusive um caso onde tudo trava</li>
+      </ul>
+      <div class="card">
+        <h3>Por que isso importa</h3>
+        <p class="small">Os três métodos atacam o <strong>mesmo</strong> modelo matemático de formas diferentes: um busca por enumeração inteligente (B&B/B&C), o outro relaxa uma restrição e trabalha só com bounds (Lagrangeana). Comparar os três no mesmo problema evidencia o trade-off entre força de bound, tempo e garantia de otimalidade.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 -->
+  <section class="slide">
+    <h2>1. O problema <span class="tag">objetivo em texto</span></h2>
+    <div class="grid2">
+      <div>
+        <p>Dado um <strong>depósito</strong>, um conjunto de <strong>clientes</strong> (cada um com demanda, janela de tempo e tempo de serviço) e uma frota de veículos idênticos de capacidade <span class="pill">Q</span>, encontrar rotas que:</p>
+        <ul>
+          <li>partem e retornam ao depósito;</li>
+          <li>atendem <strong>cada cliente exatamente uma vez</strong>;</li>
+          <li>nunca excedem a capacidade do veículo;</li>
+          <li>respeitam a janela de tempo de cada cliente.</li>
+        </ul>
+        <p>Objetivo <strong>lexicográfico</strong> clássico do benchmark de Solomon:</p>
+        <ol>
+          <li>minimizar o <strong>número de veículos</strong> usados;</li>
+          <li>entre as soluções empatadas em (1), minimizar a <strong>distância total</strong> percorrida.</li>
+        </ol>
+      </div>
+      <div class="card">
+        <h3>Por que duas fases?</h3>
+        <p class="small">Um objetivo lexicográfico não é uma soma ponderada: nenhuma quantidade de economia de distância pode justificar usar um veículo a mais. Resolvemos isso com <strong>duas fases</strong> sequenciais: fase 1 minimiza veículos, fase 2 <em>fixa</em> esse número e minimiza distância — em todos os três métodos.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4 -->
+  <section class="slide">
+    <h2>1. Formulação matemática <span class="tag">arc-flow 2-index</span></h2>
+    <div class="grid2">
+      <div>
+        <h3>Variáveis</h3>
+        <ul>
+          <li><span class="pill">x[i,j] ∈ {0,1}</span> — arco (i,j) usado (0 = depósito)</li>
+          <li><span class="pill">w[i] ≥ 0</span> — instante de início do atendimento em i</li>
+          <li><span class="pill">u[i] ≥ 0</span> — carga acumulada até e incluindo i</li>
+        </ul>
+        <h3>Função objetivo</h3>
+        <div class="formula">Fase 1 (frota):   min  Σ x[0,j]
+Fase 2 (distância): min  Σ c[i,j] · x[i,j]</div>
+      </div>
+      <div>
+        <h3>Restrições principais</h3>
+        <div class="formula">grau de saída/entrada = 1     (cada cliente)
+grau do depósito ≤ K (ou = K na fase 2)
+saída do depósito = entrada no depósito
+w[j] ≥ w[i]+s_i+t_ij − M(1−x[i,j])
+u[j] ≥ u[i]+d_j − Q(1−x[i,j])</div>
+        <p class="note">A linkagem de tempo, sozinha, já <strong>elimina subciclos</strong> que não passam pelo depósito (tempos de viagem &gt; 0) — não precisamos de SEC explícito para a corretude do modelo.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4b -->
+  <section class="slide">
+    <h2>Por que arc-flow compacto, não set-partitioning? <span class="tag">trade-off clássico</span></h2>
+    <div class="grid2">
+      <div>
+        <p class="small">É um dilema clássico de pesquisa operacional para roteamento, corte de estoque e escalonamento: <em>set-partitioning</em> (uma variável por rota viável) dá relaxações lineares muito mais fortes, mas o número de rotas é exponencial — exige geração de colunas (branch-and-price). <em>Arc-flow compacto</em> (nossa escolha) tem número polinomial de variáveis e entra direto num solver de LP padrão, mas paga o preço de uma relaxação mais fraca e de simetria conforme a instância cresce.</p>
+        <table style="font-size:.92rem">
+          <thead><tr><th></th><th>Set-partitioning</th><th>Arc-flow compacto</th></tr></thead>
+          <tbody>
+            <tr><td>Variáveis</td><td>1 por rota (exponencial)</td><td>1 por arco (polinomial)</td></tr>
+            <tr><td>Bound de LP</td><td>Forte</td><td>Fraco (MTZ)</td></tr>
+            <tr><td>Simetria de frota</td><td>Não sofre (rotas são as variáveis)</td><td>Sofre (veículos homogêneos e indistintos)</td></tr>
+            <tr><td>Algoritmo exato</td><td>Branch-and-price (complexo)</td><td>B&amp;B/B&amp;C direto (mais simples)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3>Escolhemos arc-flow compacto porque...</h3>
+        <p class="small">O objetivo do projeto era implementar B&amp;B/B&amp;C <strong>do zero</strong>, sobre um modelo que um solver de LP genérico resolvesse diretamente nó a nó. Geração de colunas exigiria resolver um pricing problem (ESPPRC) <em>dentro</em> de cada nó do B&amp;B — viável (é o que a Lagrangeana já faz!), mas escopo maior que o pedido. Troca consciente: simplicidade de implementação agora, ao custo de bound mais fraco e simetria em instâncias maiores.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4c -->
+  <section class="slide">
+    <h2>A troca se confirma nos nossos próprios resultados</h2>
+    <div class="grid2">
+      <div>
+        <p class="small">A literatura resume o trade-off como: <em>"Compact arc-flow models are simpler to implement directly into standard solvers but suffer from weak LP relaxations and symmetry issues as the problem scales."</em> — isso apareceu, na prática, em pelo menos três achados concretos deste projeto:</p>
+        <ul>
+          <li><strong>Bound de LP fraco, mensurado:</strong> a relaxação MTZ nem sequer descobre o bound trivial de bin-packing sozinha — em c102/100, a LP raiz reportava 8 veículos quando o mínimo válido por capacidade já era 10. Precisamos adicionar esse corte manualmente (<span class="pill">fleet_size_lb</span>) só para corrigir o ponto de partida.</li>
+          <li><strong>Gap que não fecha em escala:</strong> mesmo com esse corte extra e com todos os cortes automáticos do Gurobi (Gomory/MIR/cover/clique), c102/100 trava em 11 veículos vs. bound 10 (gap ~9%) após 300s dedicados só à fase 1 — o ótimo publicado é 10. Não é falta de tempo, é o teto de força da formulação.</li>
+          <li><strong>Simetria de frota homogênea:</strong> o objetivo "minimizar veículos" (soma de arcos saindo do depósito) é extremamente degenerado na LP — muitas atribuições fracionárias empatam no mesmo bound porque os veículos são indistinguíveis. Isso forçou um tie-break artificial (ε·distância) e, mesmo assim, a árvore manual explode sem achar solução em instâncias maiores (rc101/25 sem cortes; r201/rc201 com 100 clientes nem com B&amp;C).</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Conclusão prática</h3>
+        <p class="small">O texto pesquisado bate com o que vimos: escalamos até ~25–50 clientes sem problema, mas em 100 clientes com janelas largas (R2/RC2) o modelo compacto simplesmente não tem bound suficiente para um B&amp;B/B&amp;C fechar — nem o próprio solver automático do Gurobi, rodando sobre o mesmo MILP, escapa dessa limitação de formulação. Corrigir isso de verdade exigiria trocar para set-partitioning + geração de colunas (branch-and-price), fora do escopo deste projeto.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 -->
+  <section class="slide">
+    <h2>Decisões de projeto</h2>
+    <div class="grid2">
+      <ul>
+        <li><strong>Arc-flow compacta</strong>, não set-partitioning: evita ter que gerar colunas (branch-and-price) para B&B/B&C — mais simples de implementar do zero.</li>
+        <li><strong>Pré-processamento:</strong> arcos i→j fisicamente inviáveis (chegar antes do fim da janela de j, saindo o quanto antes de i) são fixados em 0 antes de qualquer busca.</li>
+        <li><strong>Gurobi como motor de LP</strong>, não como solver MIP: em B&B/B&C, todas as variáveis x são relaxadas para contínuas — a integralidade vem só do nosso branching.</li>
+      </ul>
+      <div class="card">
+        <h3>⚠️ Correção importante</h3>
+        <p class="small">Uma versão inicial usava <code>model.optimize()</code> do Gurobi com <code>Cuts=0</code>/<code>Cuts=-1</code> e um callback de cortes — ou seja, a <strong>árvore de busca era do Gurobi</strong>, não nossa. Isso foi identificado e reescrito: agora B&B/B&C rodam sobre uma árvore própria (fila de prioridade + branching manual), e a versão "solver automático do Gurobi" foi isolada como <span class="pill">reference_gurobi.py</span>, usada só como baseline de comparação.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 -->
+  <section class="slide">
+    <h2>2. Branch-and-Bound <span class="tag">implementação manual</span></h2>
+    <div class="grid2">
+      <div>
+        <div class="flow-step"><span class="step-number">1</span><div>Relaxa x para <code>[0,1]</code> contínuo; resolve a LP da raiz (Gurobi = só o solver de LP).</div></div>
+        <div class="flow-step"><span class="step-number">2</span><div>Fila de prioridade (<em>best-first</em>) ordenada pelo bound de LP de cada nó pendente.</div></div>
+        <div class="flow-step"><span class="step-number">3</span><div>A cada nó: reaplica os limites de variável herdados do branching e resolve a LP de novo.</div></div>
+        <div class="flow-step"><span class="step-number">4</span><div>Poda por <strong>bound</strong> (LP ≥ incumbente), por <strong>inviabilidade</strong>, ou aceita como novo incumbente se a solução já é inteira.</div></div>
+        <div class="flow-step"><span class="step-number">5</span><div>Senão, <strong>branching</strong>: escolhe x[i,j] mais fracionária (mais próxima de 0,5), gera dois filhos (fixando em 0 e em 1).</div></div>
+      </div>
+      <div class="card">
+        <h3>Sem cortes extras</h3>
+        <p class="small">Nenhuma desigualdade além da formulação base é adicionada — o bound de cada nó vem <em>só</em> da relaxação linear + dos limites de variável do branching. É o "puro" branch-and-bound clássico.</p>
+        <p class="note">Achado prático: para instâncias mistas (RC) maiores, o objetivo da fase 1 (contar veículos) é muito degenerado — precisamos de um pequeno <em>tie-break</em> de distância (ε·distância) para guiar a busca até a integralidade.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 -->
+  <section class="slide">
+    <h2>3. Branch-and-Cut <span class="tag">implementação manual</span></h2>
+    <div class="grid2">
+      <div>
+        <p>Mesma árvore do Branch-and-Bound, mas na raiz <strong>e</strong> em cada nó, antes de decidir branching, roda um <strong>loop de planos de corte</strong> sobre a solução fracionária:</p>
+        <ul>
+          <li><strong>Rounded Capacity Cuts (RCC):</strong> componentes conexas do grafo fracionário cuja demanda total excede Q exigem mais arcos cruzando sua fronteira.</li>
+          <li><strong>Infeasible-path cuts:</strong> trincas (i,j,k) onde visitar i→j→k violaria a janela de tempo, mesmo que os arcos individuais pareçam ok.</li>
+        </ul>
+        <p>Cortes violados são adicionados como <strong>restrições globais permanentes</strong> ao modelo (válidas em toda a árvore), e a LP é resolvida de novo — repete até não haver mais corte violado.</p>
+      </div>
+      <div class="card">
+        <h3>Efeito esperado</h3>
+        <p class="small">Bound de LP mais forte em cada nó ⇒ mais podas ⇒ <span class="highlight">menos nós explorados</span> que o B&B puro para chegar ao mesmo ótimo. É exatamente isso que os resultados mostram a seguir.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7b -->
+  <section class="slide">
+    <h2>Escalando para 100 clientes <span class="tag">o que precisou mudar</span></h2>
+    <div class="grid2">
+      <ul>
+        <li><strong>Fase 1 delegada ao MIP nativo do Gurobi:</strong> contar arcos de saída do depósito não tem estrutura de roteamento para nossa árvore explorar — virava o gargalo real (8 000–11 000 nós sem sequer terminar a fase 1). Não há nada "manual" de interessante para hand-rollar aqui, então <code>_find_min_vehicles</code> chama o Gurobi automático com um orçamento de tempo próprio (≤ 20% do tempo total, máx. 60s); a fase 2 (roteamento real) continua 100% manual.</li>
+        <li><strong>Atualização de bounds por diferença:</strong> a cada nó, só as variáveis cujos limites mudaram desde o nó anterior são tocadas, em vez de resetar as ~10 000 variáveis de arco inteiras — grande fator constante em 100 clientes.</li>
+        <li><strong>Loop de cortes por nó reduzido</strong> de 20 para 8 rodadas (separação de RCC/infeasible-path já é O(n²) por rodada).</li>
+      </ul>
+      <div class="card">
+        <h3>Resultado</h3>
+        <p class="small">r101/100 e c201/100 passaram de "sem solução em 300s" para gap &lt;1% (r101) ou ótimo comprovado em ~10s (c201). Mas r201/rc201/100 continuam sem achar nenhuma solução viável mesmo em 200s — família de horizonte longo/janelas largas, conhecida na literatura como o caso mais difícil para formulações compactas exatas.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8 -->
+  <section class="slide">
+    <h2>4. Relaxação Lagrangeana <span class="tag">o que ela realmente faz</span></h2>
+    <div class="grid2">
+      <div>
+        <p>Dualiza a restrição <em>"cliente atendido exatamente uma vez"</em>. O subproblema resultante decompõe em cópias independentes de um <strong>caminho mínimo com restrição de recursos</strong> (ESPPRC: janela de tempo + capacidade), resolvido por <em>label-setting</em> próprio com relaxação <strong>ng-route</strong> (evita explosão da elementaridade pura).</p>
+        <p>Multiplicadores atualizados por <strong>subgradiente</strong> a cada iteração (regra de Polyak/Held-Karp):</p>
+        <div class="formula">step = α · (UB − LB_best) / ||g||²
+λ_i ← λ_i + step · g_i    (g_i = 1 − nº de vezes que i foi visitado)</div>
+        <p class="note">Usa <strong>LB_best</strong> (não o lb ruidoso da iteração corrente) no denominador — estabiliza o tamanho do passo. K (nº de veículos do subproblema) vem de uma resolução rápida do Gurobi (fase 1), não do <code>max_vehicles</code> bruto da instância — evita um bound instável.</p>
+        <div class="card" style="margin-top:1em; border-color:#7c2d12; background:#1a1410;">
+          <p class="small" style="color:#fca5a5"><strong>⚠️ Ponto-chave:</strong> a Relaxação Lagrangeana <strong>não otimiza a função objetivo real</strong>. Ela só produz, a cada iteração, um número (o valor dual). Não existe, no método clássico, nenhuma rota real sendo montada.</p>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Upper bound é um "bônus"</h3>
+        <p class="small">O <code>distance</code> reportado vem de um heurístico auxiliar: rotas "atraentes" descobertas como subproduto do subproblema são guardadas numa pool e periodicamente montadas numa solução completa (cobertura gulosa + heurístico guloso nos clientes restantes). <strong>Sem garantia de otimalidade.</strong></p>
+        <div class="formula">Gap Lagrangeano = (upper_bound − lower_bound) / upper_bound</div>
+        <p class="note">"Melhor iteração" = última iteração em que o bound certificado (lower_bound) foi melhorado — indica a velocidade de convergência do subgradiente.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9 -->
+  <section class="slide">
+    <h2>Métricas reportadas por método</h2>
+    <table>
+      <thead><tr><th>Métrica</th><th>B&amp;B / B&amp;C</th><th>Relaxação Lagrangeana</th></tr></thead>
+      <tbody>
+        <tr><td>Valor ótimo / incumbente</td><td>Melhor solução inteira encontrada</td><td>Upper bound (heurístico de colunas)</td></tr>
+        <tr><td>Relaxação linear na raiz</td><td>LP da formulação (B&B) / LP após cortes (B&C)</td><td>— (não aplicável ao método)</td></tr>
+        <tr><td>Nós explorados</td><td>Nós da árvore best-first</td><td>Iterações de subgradiente</td></tr>
+        <tr><td>Tempo computacional</td><td>Segundos (fase 1 + fase 2)</td><td>Segundos até parar (iterações/tempo)</td></tr>
+        <tr><td>Limite inferior final</td><td>Bound do melhor nó pendente / incumbente</td><td>best_lower_bound (só conta iteração exata)</td></tr>
+        <tr><td>Gap final</td><td>(incumbente − lower_bound) / incumbente</td><td>(upper_bound − lower_bound) / upper_bound</td></tr>
+      </tbody>
+    </table>
+    <p class="note">Para a Lagrangeana, só iterações em que o subproblema ESPPRC foi resolvido <strong>exatamente</strong> (não cortado por tempo/limite de rótulos) podem elevar o lower_bound — senão o "bound" deixaria de ser certificado.</p>
+  </section>
+
+  <!-- 10 -->
+  <section class="slide">
+    <h2>Resultados — r101, 20 clientes <span class="tag">cortes reduzem a árvore</span></h2>
+    <table>
+      <thead><tr><th>Método</th><th>Valor encontrado</th><th>Gap (%)</th><th>Tempo (s)</th><th>Nós / Iterações</th></tr></thead>
+      <tbody>
+        <tr><td>Branch-and-Bound</td><td>516,61</td><td>0,00%</td><td>0,042</td><td>10</td></tr>
+        <tr><td>Branch-and-Cut</td><td>516,61</td><td>0,00%</td><td>0,037</td><td class="badge-ok">2</td></tr>
+        <tr><td>Relaxação Lagrangeana</td><td>586,75 (ub) / 507,10 (lb)</td><td>13,58%</td><td>0,21</td><td>100</td></tr>
+      </tbody>
+    </table>
+    <p class="note">B&amp;B e B&amp;C encontram o mesmo ótimo comprovado (516,61), mas o B&amp;C fecha a árvore em <strong>2 nós</strong> contra <strong>10</strong> do B&amp;B puro — os cortes resolvem a fracionalidade na raiz.</p>
+  </section>
+
+  <!-- 11 -->
+  <section class="slide">
+    <h2>Resultados — rc101, 15 clientes</h2>
+    <table>
+      <thead><tr><th>Método</th><th>Valor encontrado</th><th>Gap (%)</th><th>Tempo (s)</th><th>Nós / Iterações</th></tr></thead>
+      <tbody>
+        <tr><td>Branch-and-Bound</td><td>228,28</td><td>0,00%</td><td>0,054</td><td>52</td></tr>
+        <tr><td>Branch-and-Cut</td><td>228,28</td><td>0,00%</td><td>0,061</td><td class="badge-ok">31</td></tr>
+        <tr><td>Relaxação Lagrangeana</td><td>454,94 (ub) / 227,93 (lb)</td><td>49,90%</td><td>5,11</td><td>100</td></tr>
+      </tbody>
+    </table>
+    <p class="note">Instância mista (Random + Clustered): mais difícil que r101/c101 — o lower_bound Lagrangeano (227,93) chega bem perto do ótimo (228,28), mas o upper_bound heurístico ainda fica longe.</p>
+  </section>
+
+  <!-- 12 -->
+  <section class="slide">
+    <h2>Resultados — rc101, 25 clientes <span class="tag">quando os cortes importam</span></h2>
+    <table>
+      <thead><tr><th>Método</th><th>Valor encontrado</th><th>Gap (%)</th><th>Tempo (s)</th><th>Nós / Iterações</th></tr></thead>
+      <tbody>
+        <tr><td>Branch-and-Bound</td><td class="badge-bad">não encontrou solução</td><td>—</td><td>37,3</td><td>20 000 (limite)</td></tr>
+        <tr><td>Branch-and-Cut</td><td class="badge-warn">471,26</td><td>3,11%</td><td>93,7</td><td>40 000 (limite)</td></tr>
+        <tr><td>Relaxação Lagrangeana</td><td>677,62 (ub) / 398,23 (lb)</td><td>41,23%</td><td>2,71</td><td>100</td></tr>
+        <tr style="opacity:.7"><td><em>Gurobi automático (baseline)</em></td><td><em>462,16 (ótimo)</em></td><td><em>0,00%</em></td><td><em>0,36</em></td><td><em>172</em></td></tr>
+      </tbody>
+    </table>
+    <p class="note">Aqui o B&amp;B puro <strong>não consegue nem achar uma solução inteira</strong> dentro do limite de 20 000 nós — o objetivo da fase 1 (contar veículos) fica extremamente degenerado. O B&amp;C, com seus cortes, ao menos encontra uma solução a 3% do ótimo. O solver automático do Gurobi (linha de referência, <strong>não</strong> um dos 3 métodos) resolve em 172 nós — evidenciando o quanto de engenharia (presolve, heurísticas, cortes avançados) existe por trás de um solver comercial maduro.</p>
+  </section>
+
+  <!-- 13 -->
+  <section class="slide">
+    <h2>Resultados — c101, 25 clientes <span class="tag">caso feliz</span></h2>
+    <table>
+      <thead><tr><th>Método</th><th>Valor encontrado</th><th>Gap (%)</th><th>Tempo (s)</th><th>Nós / Iterações</th></tr></thead>
+      <tbody>
+        <tr><td>Branch-and-Bound</td><td>191,81</td><td>0,00%</td><td>0,052</td><td>2</td></tr>
+        <tr><td>Branch-and-Cut</td><td>191,81</td><td>0,00%</td><td>0,054</td><td>2</td></tr>
+        <tr><td>Relaxação Lagrangeana</td><td>370,23 (ub) / 185,58 (lb)</td><td>49,88%</td><td>3,91</td><td>100</td></tr>
+      </tbody>
+    </table>
+    <p class="note">Para esta instância clusterizada, a relaxação linear da <strong>raiz já é o ótimo inteiro</strong> (191,81) — nem B&amp;B nem B&amp;C precisam ramificar de verdade. O lower_bound Lagrangeano (185,58) fica a 3,2% do ótimo real, mas o upper_bound heurístico é bem mais fraco aqui.</p>
+  </section>
+
+  <!-- 14 -->
+  <section class="slide">
+    <h2>Validação — instâncias de 10 clientes</h2>
+    <table>
+      <thead><tr><th>Instância</th><th>Método</th><th>Valor</th><th>Gap</th><th>Tempo (s)</th><th>Nós/Iter.</th></tr></thead>
+      <tbody>
+        <tr><td rowspan="3">c101</td><td>Branch-and-Bound</td><td>58,33</td><td>0%</td><td>0,010</td><td>2</td></tr>
+        <tr><td>Branch-and-Cut</td><td>58,33</td><td>0%</td><td>0,010</td><td>2</td></tr>
+        <tr><td>Lagrangeana</td><td>122,12 / 58,33</td><td>52,2%</td><td>0,07</td><td>2</td></tr>
+        <tr><td rowspan="3">r101</td><td>Branch-and-Bound</td><td>269,53</td><td>0%</td><td>0,014</td><td>20</td></tr>
+        <tr><td>Branch-and-Cut</td><td>269,53</td><td>0%</td><td>0,015</td><td>18</td></tr>
+        <tr><td>Lagrangeana</td><td>293,04 / 259,12</td><td>11,6%</td><td>0,03</td><td>100</td></tr>
+        <tr><td rowspan="3">rc101</td><td>Branch-and-Bound</td><td>185,91</td><td>0%</td><td>0,019</td><td>29</td></tr>
+        <tr><td>Branch-and-Cut</td><td>185,91</td><td>0%</td><td>0,019</td><td>19</td></tr>
+        <tr><td>Lagrangeana</td><td>319,46 / 185,83</td><td>41,8%</td><td>0,72</td><td>100</td></tr>
+      </tbody>
+    </table>
+    <p class="note">Em instâncias pequenas, os três métodos <strong>concordam</strong> no valor ótimo (B&amp;B e B&amp;C encontram exatamente o mesmo valor que o Gurobi de referência) — validação de corretude da formulação e das árvores manuais.</p>
+  </section>
+
+  <!-- 15 -->
+  <section class="slide">
+    <h2>Limitações conhecidas</h2>
+    <div class="two-col-list">
+      <ul>
+        <li><strong>Licença Gurobi (size-limited):</strong> ~2000 variáveis/restrições. O modelo compacto de 25 clientes cabe (~700 vars); 50 clientes não (~2650 vars) sem licença acadêmica.</li>
+        <li><strong>B&amp;B puro em instâncias RC maiores:</strong> objetivo de fase 1 (contar veículos) é degenerado o bastante para explodir em nós mesmo com tie-break — visto em rc101/25.</li>
+        <li><strong>ESPPRC do zero:</strong> mesmo com relaxação ng-route, instâncias tipo C podem não fechar exatamente dentro do tempo — bound reportado fica marcado como não-certificado nesses casos.</li>
+        <li><strong>Heurístico de upper bound da Lagrangeana:</strong> guloso simples — funciona, mas fica longe do ótimo em instâncias mais difíceis.</li>
+        <li><strong>Bound fraco da formulação compacta em escala:</strong> mesmo com o corte de bin-packing, c102/100 trava em 11 veículos (bound 10, gap ~9%); r201/rc201/100 não fecham nem com B&amp;C — limite de formulação (arc-flow/MTZ), não de tempo de execução.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 16 -->
+  <section class="slide">
+    <h2>Conclusão</h2>
+    <div class="grid2">
+      <ul>
+        <li>Mesmo modelo matemático (arc-flow 2-index), <strong>três formas diferentes</strong> de explorá-lo: enumeração pura, enumeração + cortes, e relaxação dual.</li>
+        <li>Cortes (RCC + infeasible-path) <span class="highlight">reduzem consistentemente</span> o número de nós explorados frente ao B&amp;B puro.</li>
+        <li>A Relaxação Lagrangeana entrega bounds de qualidade competitiva em segundos, mas <strong>não substitui</strong> um método exato — ela não otimiza, só limita.</li>
+        <li>Um solver comercial maduro (Gurobi automático) ainda vence por larga margem — o valor do projeto está em entender <em>por quê</em>.</li>
+      </ul>
+      <div class="card center">
+        <h3>Obrigado!</h3>
+        <p class="small">Código, testes e scripts de benchmark disponíveis no repositório do projeto.</p>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<div class="progress" id="progress"></div>
+<div class="footer-bar">
+  <span>VRPTW — Lagrangeana / Branch-and-Bound / Branch-and-Cut</span>
+  <span class="small">Use <span class="kbd">&larr;</span> <span class="kbd">&rarr;</span> ou <span class="kbd">espaço</span> para navegar</span>
+  <span id="slide-counter"></span>
+</div>
+<button class="nav-btn" style="position:absolute; top:20px; right:20px;" id="prevBtn">&larr;</button>
+<button class="nav-btn" style="position:absolute; top:20px; right:70px;" id="nextBtn" >&rarr;</button>
+
+<script>
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  let idx = 0;
+
+  function render() {
+    slides.forEach((s, i) => s.classList.toggle('active', i === idx));
+    document.getElementById('progress').style.width = ((idx + 1) / slides.length * 100) + '%';
+    document.getElementById('slide-counter').textContent = (idx + 1) + ' / ' + slides.length;
+  }
+  function go(delta) {
+    idx = Math.min(Math.max(idx + delta, 0), slides.length - 1);
+    render();
+  }
+  document.addEventListener('keydown', (e) => {
+    if (['ArrowRight', ' ', 'PageDown'].includes(e.key)) go(1);
+    if (['ArrowLeft', 'PageUp'].includes(e.key)) go(-1);
+    if (e.key === 'Home') { idx = 0; render(); }
+    if (e.key === 'End') { idx = slides.length - 1; render(); }
+  });
+  document.getElementById('nextBtn').addEventListener('click', () => go(1));
+  document.getElementById('prevBtn').addEventListener('click', () => go(-1));
+  render();
+</script>
+</body>
+</html>

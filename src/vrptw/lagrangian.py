@@ -41,8 +41,10 @@ so an exactly-solved ng-route subproblem still yields a certified, if
 somewhat weaker, Lagrangian lower bound.
 
 Caveat: even with ng-route pruning, the label set can still grow quickly
-for larger/harder instances. A `max_labels` safety cutoff bounds the
-running time; if it is hit the returned bound is only a heuristic
+for larger/harder instances. There is no cap on the number of labels
+explored -- the subproblem always runs to true optimality, bounded only
+by the overall wall-clock `time_limit` of the outer subgradient loop; if
+that deadline is hit first, the returned bound is only a heuristic
 approximation of the true subproblem optimum (documented via
 `SubproblemResult.exact`).
 """
@@ -52,6 +54,8 @@ import heapq
 import itertools
 import time as _time
 from dataclasses import dataclass, field
+
+from gurobipy import GRB
 
 from .formulation import build_model
 from .instance import VRPTWInstance
@@ -83,7 +87,6 @@ def _solve_espprc(
     reduced_cost,
     bit: dict[int, int],
     ng_mask: dict[int, int],
-    max_labels: int = 300_000,
     deadline: float | None = None,
     max_completed_routes: int = 50,
 ) -> SubproblemResult:
@@ -103,7 +106,7 @@ def _solve_espprc(
     exact = True
 
     while heap:
-        if explored >= max_labels or (deadline is not None and explored % 2000 == 0 and _time.time() > deadline):
+        if deadline is not None and explored % 2000 == 0 and _time.time() > deadline:
             exact = False
             break
         arrival, _, node, cost, real_cost, load, visited, path = heapq.heappop(heap)
@@ -174,6 +177,22 @@ def _estimate_min_vehicles(inst: VRPTWInstance, time_limit: float = 20.0) -> int
     return int(round(model.ObjVal)) if model.SolCount > 0 else min(inst.max_vehicles, inst.n_customers)
 
 
+def _compute_root_lp_bound(inst: VRPTWInstance, num_vehicles: int, time_limit: float = 30.0) -> float:
+    """Plain LP relaxation of the compact formulation (fleet size fixed to the value
+    used by the Lagrangian subproblem), solved once with no branching or cuts. This is
+    NOT part of the Lagrangian method itself -- it is a cheap complementary bound
+    reported alongside it, directly comparable to the `root_lp_bound` reported by the
+    B&B/B&C trees.
+    """
+    model, v = build_model(inst, fixed_vehicles=num_vehicles, objective="distance")
+    for var in v["x"].values():
+        var.VType = GRB.CONTINUOUS
+    model.Params.OutputFlag = 0
+    model.Params.TimeLimit = time_limit
+    model.optimize()
+    return model.ObjVal if model.Status == GRB.OPTIMAL else float("-inf")
+
+
 def _greedy_solution(inst: VRPTWInstance, customers: list[int] | None = None) -> Solution:
     """Simple nearest-feasible-neighbour construction, used to seed/repair an upper bound."""
     unvisited = set(inst.customers if customers is None else customers)
@@ -239,6 +258,7 @@ def _assemble_solution_from_pool(inst: VRPTWInstance, pool: dict[frozenset, tupl
 @dataclass
 class LagrangianResult:
     best_lower_bound: float
+    root_lp_bound: float
     num_vehicles: int
     multipliers: dict
     history: list[float] = field(default_factory=list)
@@ -247,15 +267,16 @@ class LagrangianResult:
     runtime: float = 0.0
     iterations_run: int = 0
     subproblem_exact_throughout: bool = True
+    best_lb_iteration: int = 0
+    best_ub_iteration: int = 0
 
 
 def lagrangian_relaxation(
     inst: VRPTWInstance,
     num_vehicles: int | None = None,
-    max_iterations: int = 100,
+    max_iterations: int | None = None,
     initial_alpha: float = 2.0,
     upper_bound: float | None = None,
-    max_labels: int = 60_000,
     ng_k: int = 8,
     time_limit: float = 120.0,
     verbose: bool = False,
@@ -263,6 +284,7 @@ def lagrangian_relaxation(
     start_time = _time.time()
     customers = list(inst.customers)
     K = num_vehicles if num_vehicles is not None else _estimate_min_vehicles(inst)
+    root_lp_bound = _compute_root_lp_bound(inst, K)
 
     bit = {c: 1 << idx for idx, c in enumerate(customers)}
     ng_mask = _build_ng_masks(inst, customers, bit, k=ng_k)
@@ -281,12 +303,16 @@ def lagrangian_relaxation(
     history: list[float] = []
     stall_count = 0
     exact_throughout = True
+    best_lb_iteration = 0
+    best_ub_iteration = 0
     it = 0
+    deadline = start_time + time_limit  # sole stopping criterion for the subproblem -- no node/label cap
 
-    for it in range(1, max_iterations + 1):
+    while max_iterations is None or it < max_iterations:
         elapsed = _time.time() - start_time
         if elapsed > time_limit:
             break
+        it += 1
 
         reduced_cost = {}
         for i in range(inst.n_nodes):
@@ -295,12 +321,7 @@ def lagrangian_relaxation(
                     continue
                 reduced_cost[i, j] = inst.distance[i, j] - (lam[j] if j in lam else 0.0)
 
-        # Give this call a fair share of whatever time is left, so one hard
-        # subproblem can't swallow the whole run and starve later iterations.
-        remaining_time = time_limit - elapsed
-        remaining_iters = max(max_iterations - it + 1, 1)
-        per_iter_deadline = _time.time() + max(remaining_time / remaining_iters, 0.05)
-        sub = _solve_espprc(inst, reduced_cost, bit, ng_mask, max_labels=max_labels, deadline=per_iter_deadline)
+        sub = _solve_espprc(inst, reduced_cost, bit, ng_mask, deadline=deadline)
         exact_throughout &= sub.exact
 
         for real_cost, path in sub.completed_routes:
@@ -320,6 +341,8 @@ def lagrangian_relaxation(
         improved = False
         if sub.exact:
             improved = lb > best_lb + 1e-6
+            if improved:
+                best_lb_iteration = it
             best_lb = max(best_lb, lb)
 
         # Every few iterations, try to turn the pricing problem's by-product
@@ -330,6 +353,7 @@ def lagrangian_relaxation(
             if ok and candidate.total_distance(inst) < upper_bound - 1e-6:
                 upper_bound = candidate.total_distance(inst)
                 best_solution = candidate
+                best_ub_iteration = it
 
         # Subgradient of the relaxed constraint "customer i visited exactly once".
         visited_in_best = set(sub.path[1:-1]) if (sub.path and used_slots > 0) else set()
@@ -368,9 +392,11 @@ def lagrangian_relaxation(
         if ok and candidate.total_distance(inst) < upper_bound - 1e-6:
             upper_bound = candidate.total_distance(inst)
             best_solution = candidate
+            best_ub_iteration = it
 
     return LagrangianResult(
         best_lower_bound=best_lb,
+        root_lp_bound=root_lp_bound,
         num_vehicles=K,
         multipliers=lam,
         history=history,
@@ -379,4 +405,6 @@ def lagrangian_relaxation(
         runtime=_time.time() - start_time,
         iterations_run=it,
         subproblem_exact_throughout=exact_throughout,
+        best_lb_iteration=best_lb_iteration,
+        best_ub_iteration=best_ub_iteration,
     )

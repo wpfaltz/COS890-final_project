@@ -24,6 +24,8 @@ to strengthen the LP relaxation (branch-and-cut), not for feasibility.
 """
 from __future__ import annotations
 
+import math
+
 import gurobipy as gp
 from gurobipy import GRB
 
@@ -82,6 +84,13 @@ def build_model(
         model.addConstr(depot_out == fixed_vehicles, name="fleet_size")
     else:
         model.addConstr(depot_out <= max_vehicles, name="fleet_size_ub")
+        # Trivial bin-packing lower bound (total demand / capacity): the MTZ-style
+        # capacity linking below has a very weak LP relaxation on its own and won't
+        # discover this bound by itself, so a "vehicles" objective search can spend
+        # a long time confirming a fleet size well above the true minimum.
+        min_vehicles = math.ceil(sum(inst.demand[c] for c in customers) / Q) if Q > 0 else 0
+        if min_vehicles > 0:
+            model.addConstr(depot_out >= min_vehicles, name="fleet_size_lb")
     model.addConstr(depot_out == depot_in, name="depot_flow_conservation")
 
     # Time-window linking (also rules out subtours not containing the depot).
