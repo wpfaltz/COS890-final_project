@@ -45,17 +45,9 @@ def main() -> None:
                 print(f"  route {idx}: {route.nodes} (load={route.load(inst):.1f}, dist={route.distance(inst):.2f})")
     else:
         lr = lagrangian_relaxation(inst, time_limit=args.time_limit, verbose=args.verbose)
-        gap = (lr.upper_bound - lr.best_lower_bound) / lr.upper_bound if lr.upper_bound else float("nan")
         print(f"lower_bound={lr.best_lower_bound:.2f} root_lp_bound={lr.root_lp_bound:.2f} "
-              f"upper_bound={lr.upper_bound:.2f} gap={gap:.4%} "
               f"vehicles={lr.num_vehicles} iterations={lr.iterations_run} runtime={lr.runtime:.2f}s "
-              f"subproblem_exact={lr.subproblem_exact_throughout} "
-              f"best_lb_iteration={lr.best_lb_iteration} best_ub_iteration={lr.best_ub_iteration}")
-        if lr.best_solution is not None:
-            ok, reason = lr.best_solution.validate(inst)
-            print("solution valid" if ok else f"solution INVALID: {reason}")
-            for idx, route in enumerate(lr.best_solution.routes):
-                print(f"  route {idx}: {route.nodes} (load={route.load(inst):.1f}, dist={route.distance(inst):.2f})")
+              f"subproblem_exact={lr.subproblem_exact_throughout} best_lb_iteration={lr.best_lb_iteration}")
 
 
 if __name__ == "__main__":
