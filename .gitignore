@@ -5,7 +5,6 @@ __pycache__/
 build/
 dist/
 .pytest_cache/
-results/*
 !results/.gitkeep
 *.log
 gurobi.log
